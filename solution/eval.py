@@ -4,13 +4,10 @@ from typing import List, Dict
 from tqdm import tqdm
 
 from .data_loader import load_split, load_correspondences
-from .model import HomographyMapper
+from .model import HomographyMapper, PolynomialMapper
 
 
-def compute_med(
-    data_root: Path, sessions: List[str], camera: str, model: HomographyMapper
-) -> float:
-    """Среднее евклидово расстояние (MED) для одной камеры на валидации."""
+def compute_med(data_root: Path, sessions: List[str], camera: str, model) -> float:
     errors = []
     for rel_path in tqdm(sessions, desc=f"Evaluating {camera}"):
         session_path = data_root / rel_path
@@ -21,17 +18,21 @@ def compute_med(
     return float(np.mean(errors)) if errors else float("inf")
 
 
-def evaluate_models(data_root: Path, models_dir: Path) -> Dict[str, float]:
-    """Загрузить модели из models_dir и вычислить MED на валидации."""
+def evaluate_models(
+    data_root: Path, models_dir: Path, model_type: str = "polynomial"
+) -> Dict[str, float]:
     _, val_sessions = load_split(data_root)
     metrics = {}
     for camera in ["top", "bottom"]:
-        model_path = models_dir / f"homography_{camera}.npy"
+        model_path = models_dir / f"{model_type}_{camera}.npy"
         if not model_path.exists():
-            print(f"Модель для {camera} не найдена: {model_path}")
+            print(f"Модель {model_type}_{camera} не найдена")
             metrics[f"{camera}_med"] = float("nan")
             continue
-        model = HomographyMapper.load(model_path)
+        if model_type == "homography":
+            model = HomographyMapper.load(model_path)
+        else:
+            model = PolynomialMapper.load(model_path)
         med = compute_med(data_root, val_sessions, camera, model)
         metrics[f"{camera}_med"] = med
         print(f"{camera} → door2  MED = {med:.2f} px")

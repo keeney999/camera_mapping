@@ -1,51 +1,40 @@
 # Camera Mapping: top/bottom → door2
 
-Маппинг пиксельных координат с верхней/нижней камеры на основную камеру `door2` с помощью гомографии.
+Маппинг пиксельных координат с камер top/bottom на кадр door2 с помощью полиномиальной регрессии 2-й степени.
 
 ## Стек
 
 - Python 3.10+
-- Poetry — управление зависимостями
-- OpenCV — оценка гомографии (RANSAC)
+- Poetry
+- OpenCV (гомография – опционально)
 - NumPy, tqdm
 
 ## Быстрый старт
 
 ```bash
-# 1. Клонировать проект и перейти в папку
-cd test
-
-# 2. Установить зависимости через Poetry
+# Клонировать и установить зависимости
 poetry install
-
-# 3. Активировать окружение
 poetry shell
-Обучение модели
+Обучение (полиномиальная модель по умолчанию)
 bash
-python -m solution.train --data_root /путь/к/test_task --output_dir ./models
-После обучения в папке models/ появятся файлы homography_top.npy и homography_bottom.npy.
+python -m solution.train --data_root /путь/к/test-task --output_dir ./models
+Файлы моделей: polynomial_top.npy, polynomial_bottom.npy.
 
-Оценка на валидации (MED в пикселях)
+Оценка на валидации
 bash
-python -m solution.predict --data_root /путь/к/test_task --models_dir ./models --eval
-Результат выводится в консоль и сохраняется в models/metrics.json.
+python -m solution.predict --data_root /путь/к/test-task --models_dir ./models --eval
+Результат (MED в пикселях) выводится в консоль и сохраняется в models/metrics_polynomial.json.
 
 Использование в коде
 python
 from solution.predict import Predictor
 
-predictor = Predictor("./models")
-x_door, y_door = predictor.predict(x=743.96, y=524.59, source="top")
+p = Predictor("./models")          # по умолчанию polynomial
+x_door, y_door = p.predict(743.96, 524.59, "top")
 print(x_door, y_door)
-Формат метрик
-models/metrics.json:
-
-json
-{
-  "top_med": 4.23,
-  "bottom_med": 5.17
-}
 Примечания
-Датасет распакуйте в любую папку и укажите её в --data_root.
+Если качество низкое, попробуйте модель гомографии: --model_type homography
 
-Внутри датасета должна быть структура coord_data/, описанная в TASK.md.
+Для улучшения точности требуется более сложный подход (SIFT + локальные гомографии)
+
+Датасет должен лежать в папке с подпапками train/, val/ и файлом split.json
