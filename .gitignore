@@ -8,8 +8,5 @@ env/
 venv/
 .venv/
 poetry.lock
-*.npy
-models/
-data/
 *.log
 .DS_Store
