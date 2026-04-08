@@ -4,7 +4,7 @@ from typing import List, Dict
 from tqdm import tqdm
 
 from .data_loader import load_split, load_correspondences
-from .model import HomographyMapper, PolynomialMapper
+from .model import HomographyMapper, PolynomialMapper, KNNMapper
 
 
 def compute_med(data_root: Path, sessions: List[str], camera: str, model) -> float:
@@ -31,6 +31,8 @@ def evaluate_models(
             continue
         if model_type == "homography":
             model = HomographyMapper.load(model_path)
+        elif model_type == "knn":
+            model = KNNMapper.load(model_path)
         else:
             model = PolynomialMapper.load(model_path)
         med = compute_med(data_root, val_sessions, camera, model)

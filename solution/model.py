@@ -2,11 +2,10 @@ import cv2
 import numpy as np
 from pathlib import Path
 from typing import Union, Optional
+from sklearn.neighbors import NearestNeighbors
 
 
 class BaseMapper:
-    """Абстрактный базовый класс для всех мапперов."""
-
     def fit(self, src: np.ndarray, dst: np.ndarray) -> bool:
         raise NotImplementedError
 
@@ -22,8 +21,6 @@ class BaseMapper:
 
 
 class HomographyMapper(BaseMapper):
-    """Гомографическое преобразование (исходный вариант)."""
-
     def __init__(self, ransac_threshold: float = 3.0):
         self.H: Optional[np.ndarray] = None
         self.ransac_threshold = ransac_threshold
@@ -69,34 +66,63 @@ class HomographyMapper(BaseMapper):
 
 
 class PolynomialMapper(BaseMapper):
-    """
-    Полиномиальная регрессия 2-го порядка.
-    Для каждой выходной координаты (x', y') обучается отдельная модель:
-        x' = a0 + a1*x + a2*y + a3*x*y + a4*x^2 + a5*y^2
-        y' = b0 + b1*x + b2*y + b3*x*y + b4*x^2 + b5*y^2
-    """
-
-    def __init__(self, degree: int = 2):
+    def __init__(self, degree: int = 3, use_normalization: bool = True):
         self.degree = degree
+        self.use_normalization = use_normalization
         self.coef_x: Optional[np.ndarray] = None
         self.coef_y: Optional[np.ndarray] = None
+        self.x_mean = self.x_std = self.y_mean = self.y_std = None
+
+    def _normalize(self, points: np.ndarray, fit: bool = False) -> np.ndarray:
+        if not self.use_normalization:
+            return points
+        if fit:
+            self.x_mean = points[:, 0].mean()
+            self.x_std = points[:, 0].std()
+            self.y_mean = points[:, 1].mean()
+            self.y_std = points[:, 1].std()
+            if self.x_std == 0:
+                self.x_std = 1
+            if self.y_std == 0:
+                self.y_std = 1
+        x_norm = (points[:, 0] - self.x_mean) / self.x_std
+        y_norm = (points[:, 1] - self.y_mean) / self.y_std
+        return np.column_stack([x_norm, y_norm])
 
     def _build_design_matrix(self, points: np.ndarray) -> np.ndarray:
-        """Строит матрицу признаков: [1, x, y, xy, x^2, y^2] для degree=2."""
+        points = self._normalize(points, fit=False)
         x = points[:, 0]
         y = points[:, 1]
-        if self.degree == 2:
-            return np.column_stack([np.ones_like(x), x, y, x * y, x * x, y * y])
+        if self.degree == 3:
+            return np.column_stack(
+                [
+                    np.ones_like(x),
+                    x,
+                    y,
+                    x * x,
+                    x * y,
+                    y * y,
+                    x * x * x,
+                    x * x * y,
+                    x * y * y,
+                    y * y * y,
+                ]
+            )
         else:
-            raise NotImplementedError("Только степень 2")
+            # fallback degree=2
+            return np.column_stack([np.ones_like(x), x, y, x * x, x * y, y * y])
 
     def fit(self, src_points: np.ndarray, dst_points: np.ndarray) -> bool:
-        if len(src_points) < 6:  # нужно минимум 6 точек для 6 коэффициентов
+        if len(src_points) < 10:
             return False
-        X = self._build_design_matrix(src_points)
-        # Решаем методом наименьших квадратов
-        self.coef_x, _, _, _ = np.linalg.lstsq(X, dst_points[:, 0], rcond=None)
-        self.coef_y, _, _, _ = np.linalg.lstsq(X, dst_points[:, 1], rcond=None)
+        # Нормализуем источники
+        src_norm = self._normalize(src_points, fit=True)
+        X = self._build_design_matrix(src_norm)
+        # Регуляризация
+        XTX = X.T @ X
+        reg = np.eye(XTX.shape[0]) * 0.01
+        self.coef_x = np.linalg.solve(XTX + reg, X.T @ dst_points[:, 0])
+        self.coef_y = np.linalg.solve(XTX + reg, X.T @ dst_points[:, 1])
         return True
 
     def predict(self, points: np.ndarray) -> np.ndarray:
@@ -105,7 +131,8 @@ class PolynomialMapper(BaseMapper):
         pts = np.array(points, dtype=np.float32)
         if pts.ndim == 1:
             pts = pts.reshape(1, 2)
-        X = self._build_design_matrix(pts)
+        src_norm = self._normalize(pts, fit=False)
+        X = self._build_design_matrix(src_norm)
         pred_x = X @ self.coef_x
         pred_y = X @ self.coef_y
         result = np.column_stack([pred_x, pred_y])
@@ -114,13 +141,79 @@ class PolynomialMapper(BaseMapper):
         return result
 
     def save(self, path: Union[str, Path]) -> None:
-        data = {"degree": self.degree, "coef_x": self.coef_x, "coef_y": self.coef_y}
+        data = {
+            "degree": self.degree,
+            "use_normalization": self.use_normalization,
+            "coef_x": self.coef_x,
+            "coef_y": self.coef_y,
+            "x_mean": self.x_mean,
+            "x_std": self.x_std,
+            "y_mean": self.y_mean,
+            "y_std": self.y_std,
+        }
         np.save(str(path), data, allow_pickle=True)
 
     @classmethod
     def load(cls, path: Union[str, Path]) -> "PolynomialMapper":
         data = np.load(str(path), allow_pickle=True).item()
-        obj = cls(degree=data["degree"])
+        obj = cls(degree=data["degree"], use_normalization=data["use_normalization"])
         obj.coef_x = data["coef_x"]
         obj.coef_y = data["coef_y"]
+        obj.x_mean = data["x_mean"]
+        obj.x_std = data["x_std"]
+        obj.y_mean = data["y_mean"]
+        obj.y_std = data["y_std"]
+        return obj
+
+
+class KNNMapper(BaseMapper):
+    """
+    K ближайших соседей (KNN) для маппинга.
+    Предсказание: усреднение dst-координат K ближайших src-точек.
+    """
+
+    def __init__(self, k: int = 5):
+        self.k = k
+        self.src_points: Optional[np.ndarray] = None
+        self.dst_points: Optional[np.ndarray] = None
+        self.nbrs: Optional[NearestNeighbors] = None
+
+    def fit(self, src_points: np.ndarray, dst_points: np.ndarray) -> bool:
+        if len(src_points) < self.k:
+            return False
+        self.src_points = src_points.astype(np.float32)
+        self.dst_points = dst_points.astype(np.float32)
+        self.nbrs = NearestNeighbors(n_neighbors=self.k, algorithm="auto")
+        self.nbrs.fit(self.src_points)
+        return True
+
+    def predict(self, points: np.ndarray) -> np.ndarray:
+        if self.nbrs is None:
+            raise ValueError("Модель не обучена")
+        pts = np.array(points, dtype=np.float32)
+        if pts.ndim == 1:
+            pts = pts.reshape(1, -1)
+        distances, indices = self.nbrs.kneighbors(pts)
+        # Усредняем соответствующие dst_points
+        pred = np.array([self.dst_points[idx].mean(axis=0) for idx in indices])
+        if np.array(points).ndim == 1:
+            return pred[0]
+        return pred
+
+    def save(self, path: Union[str, Path]) -> None:
+        data = {
+            "k": self.k,
+            "src_points": self.src_points,
+            "dst_points": self.dst_points,
+        }
+        np.save(str(path), data, allow_pickle=True)
+
+    @classmethod
+    def load(cls, path: Union[str, Path]) -> "KNNMapper":
+        data = np.load(str(path), allow_pickle=True).item()
+        obj = cls(k=data["k"])
+        obj.src_points = data["src_points"]
+        obj.dst_points = data["dst_points"]
+        obj.nbrs = NearestNeighbors(n_neighbors=obj.k, algorithm="auto")
+        obj.nbrs.fit(obj.src_points)
         return obj

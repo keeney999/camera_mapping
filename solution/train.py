@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 
 from .data_loader import load_split, collect_all_points
-from .model import HomographyMapper, PolynomialMapper
+from .model import HomographyMapper, PolynomialMapper, KNNMapper
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 
@@ -16,7 +16,7 @@ def main():
         "--model_type",
         type=str,
         default="polynomial",
-        choices=["homography", "polynomial"],
+        choices=["homography", "polynomial", "knn"],
     )
     parser.add_argument("--ransac_threshold", type=float, default=3.0)
     args = parser.parse_args()
@@ -31,13 +31,21 @@ def main():
     for camera in ["top", "bottom"]:
         logging.info(f"Обработка {camera}...")
         src, dst = collect_all_points(data_root, train_sessions, camera)
-        if len(src) < 6:
-            logging.error(f"Недостаточно точек для {camera} (нужно >=6)")
-            continue
 
         if args.model_type == "homography":
+            if len(src) < 4:
+                logging.error(f"Недостаточно точек для {camera} (нужно >=4)")
+                continue
             model = HomographyMapper(ransac_threshold=args.ransac_threshold)
-        else:
+        elif args.model_type == "knn":
+            if len(src) < 1:
+                logging.error(f"Нет точек для {camera}")
+                continue
+            model = KNNMapper(k=5)
+        else:  # polynomial
+            if len(src) < 6:
+                logging.error(f"Недостаточно точек для {camera} (нужно >=6)")
+                continue
             model = PolynomialMapper(degree=2)
 
         if model.fit(src, dst):

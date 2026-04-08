@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from typing import Tuple, Union
 
-from .model import HomographyMapper, PolynomialMapper
+from .model import HomographyMapper, PolynomialMapper, KNNMapper
 
 
 class Predictor:
@@ -19,6 +19,8 @@ class Predictor:
                 )
             if model_type == "homography":
                 self._models[cam] = HomographyMapper.load(path)
+            elif model_type == "knn":
+                self._models[cam] = KNNMapper.load(path)
             else:
                 self._models[cam] = PolynomialMapper.load(path)
 
@@ -39,7 +41,7 @@ def main():
         "--model_type",
         type=str,
         default="polynomial",
-        choices=["homography", "polynomial"],
+        choices=["homography", "polynomial", "knn"],
     )
     parser.add_argument("--eval", action="store_true")
     args = parser.parse_args()
